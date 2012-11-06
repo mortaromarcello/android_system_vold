@@ -66,6 +66,7 @@ VolumeManager::VolumeManager() {
     mUmsSharingCount = 0;
     mSavedDirtyRatio = -1;
     mVolManagerDisabled = 0;
+    mNextLunNumber = 0;
 
     // set dirty ratio to ro.vold.umsdirtyratio (default 0) when UMS is active
     char dirtyratio[PROPERTY_VALUE_MAX];
@@ -127,6 +128,7 @@ int VolumeManager::stop() {
 }
 
 int VolumeManager::addVolume(Volume *v) {
+    v->setLunNumber(mNextLunNumber++);
     mVolumes->push_back(v);
     return 0;
 }
@@ -987,6 +989,19 @@ int VolumeManager::mountAsec(const char *id, const char *key, int ownerUid) {
     return 0;
 }
 
+Volume* VolumeManager::getVolumeForFile(const char *fileName) {
+    VolumeCollection::iterator i;
+
+    for (i = mVolumes->begin(); i != mVolumes->end(); ++i) {
+        const char* mountPoint = (*i)->getMountpoint();
+        if (!strncmp(fileName, mountPoint, strlen(mountPoint))) {
+            return *i;
+        }
+    }
+
+    return NULL;
+}
+
 /**
  * Mounts an image file <code>img</code>.
  */
@@ -1115,7 +1130,7 @@ int VolumeManager::listMountedObbs(SocketClient* cli) {
     }
 
     // Create a string to compare against that has a trailing slash
-    int loopDirLen = sizeof(Volume::LOOPDIR);
+    int loopDirLen = strlen(Volume::LOOPDIR);
     char loopDir[loopDirLen + 2];
     strcpy(loopDir, Volume::LOOPDIR);
     loopDir[loopDirLen++] = '/';
@@ -1256,12 +1271,8 @@ int VolumeManager::shareVolume(const char *label, const char *method) {
              sizeof(nodepath), "/dev/block/vold/%d:%d",
              MAJOR(d), MINOR(d));
 
-    // TODO: Currently only two mounts are supported, defaulting
-    // /mnt/sdcard to lun0 and anything else to lun1. Fix this.
-    if (v->isPrimaryStorage()) {
-        lun_number = 0;
-    } else {
-        lun_number = SECOND_LUN_NUM;
+    if ((lun_number = v->getLunNumber()) == -1) {
+        return -1;
     }
 
     if ((fd = openLun(lun_number)) < 0) {
@@ -1312,14 +1323,10 @@ int VolumeManager::unshareVolume(const char *label, const char *method) {
         return -1;
     }
 
-    int fd;
-    int lun_number;
+    int fd, lun_number;
 
-    // /mnt/sdcard to lun0 and anything else to lun1. Fix this.
-    if (v->isPrimaryStorage()) {
-        lun_number = 0;
-    } else {
-        lun_number = SECOND_LUN_NUM;
+    if ((lun_number = v->getLunNumber()) == -1) {
+        return -1;
     }
 
     if ((fd = openLun(lun_number)) < 0) {
@@ -1524,25 +1531,35 @@ int VolumeManager::cleanupAsec(Volume *v, bool force) {
     if (!v->isPrimaryStorage())
         return 0;
 
-    while(mActiveContainers->size()) {
-        AsecIdCollection::iterator it = mActiveContainers->begin();
+    int rc = unmountAllAsecsInDir(Volume::SEC_ASECDIR_EXT);
+
+    AsecIdCollection toUnmount;
+    // Find the remaining OBB files that are on external storage.
+    for (AsecIdCollection::iterator it = mActiveContainers->begin(); it != mActiveContainers->end();
+            ++it) {
         ContainerData* cd = *it;
-        SLOGI("Unmounting ASEC %s (dependant on %s)", cd->id, v->getMountpoint());
+
         if (cd->type == ASEC) {
-            if (unmountAsec(cd->id, force)) {
-                SLOGE("Failed to unmount ASEC %s (%s)", cd->id, strerror(errno));
-                return -1;
-            }
+            // nothing
         } else if (cd->type == OBB) {
-            if (unmountObb(cd->id, force)) {
-                SLOGE("Failed to unmount OBB %s (%s)", cd->id, strerror(errno));
-                return -1;
+            if (v == getVolumeForFile(cd->id)) {
+                toUnmount.push_back(cd);
             }
         } else {
             SLOGE("Unknown container type %d!", cd->type);
-            return -1;
         }
     }
-    return 0;
+
+    for (AsecIdCollection::iterator it = toUnmount.begin(); it != toUnmount.end(); ++it) {
+        ContainerData *cd = *it;
+        SLOGI("Unmounting ASEC %s (dependant on %s)", cd->id, v->getMountpoint());
+        if (unmountObb(cd->id, force)) {
+            SLOGE("Failed to unmount OBB %s (%s)", cd->id, strerror(errno));
+            rc = -1;
+        }
+    }
+
+    return rc;
+
 }
 
