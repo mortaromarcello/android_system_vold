@@ -75,6 +75,9 @@ public:
     int getState() { return mState; }
     bool isPrimaryStorage();
 
+    int getLunNumber() { return mLunNumber; }
+    void setLunNumber(int lunNumber);
+
     virtual int handleBlockEvent(NetlinkEvent *evt);
     virtual dev_t getDiskDevice();
     virtual dev_t getShareDevice();
