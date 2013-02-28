@@ -1365,12 +1365,12 @@ int cryptfs_enable(char *howarg, char *passwd)
     } else {
         char value[PROPERTY_VALUE_MAX];
 
-        property_get("ro.vold.wipe_on_cyrypt_fail", value, "0");
+        property_get("ro.vold.wipe_on_crypt_fail", value, "0");
         if (!strcmp(value, "1")) {
             /* wipe data if encryption failed */
             SLOGE("encryption failed - rebooting into recovery to wipe data\n");
             mkdir("/cache/recovery", 0700);
-            int fd = open("/cache/recovery/command", O_RDWR|O_CREAT|O_TRUNC);
+            int fd = open("/cache/recovery/command", O_RDWR|O_CREAT|O_TRUNC, 0600);
             if (fd >= 0) {
                 write(fd, "--wipe_data", strlen("--wipe_data") + 1);
                 close(fd);
